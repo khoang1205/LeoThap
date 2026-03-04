@@ -1,151 +1,172 @@
-﻿using OpenCvSharp;
-using System;
+﻿using System;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Threading;
-
-// Alias để tránh trùng tên Point giữa System.Drawing và OpenCvSharp
-using CvPoint = OpenCvSharp.Point;
-using DSize = System.Drawing.Size;
+using OpenCvSharp;
 
 namespace LeoThap.Auto
 {
     public static class ImageHelper
     {
-        [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
-        [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hWnd, out POINT lpPoint);
-        [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
-        [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint Msg, int wParam, int lParam);
+        // PRINTWINDOW
+        [DllImport("user32.dll")]
+        static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
 
-        const uint PW_CLIENTONLY = 0x00000001;
-        const int WM_LBUTTONDOWN = 0x0201;
-        const int WM_LBUTTONUP = 0x0202;
+        [DllImport("user32.dll")]
+        static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 
-        [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
-        [StructLayout(LayoutKind.Sequential)] struct POINT { public int X; public int Y; }
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
 
         public static Bitmap CaptureWindow(IntPtr hwnd)
         {
-            if (!GetClientRect(hwnd, out var cr))
-                throw new Exception("GetClientRect failed");
+            GetWindowRect(hwnd, out RECT rect);
 
-            int w = cr.Right - cr.Left, h = cr.Bottom - cr.Top;
-            var bmp = new Bitmap(w, h);
+            int width = rect.Right - rect.Left;
+            int height = rect.Bottom - rect.Top;
 
-            using var g = Graphics.FromImage(bmp);
-            var hdc = g.GetHdc();
-            bool ok = PrintWindow(hwnd, hdc, PW_CLIENTONLY);
-            g.ReleaseHdc(hdc);
-
-            if (!ok)
+            Bitmap bmp = new Bitmap(width, height);
+            using (Graphics g = Graphics.FromImage(bmp))
             {
-                if (!ClientToScreen(hwnd, out var tl))
-                    throw new Exception("ClientToScreen failed");
-                g.CopyFromScreen(tl.X, tl.Y, 0, 0, new DSize(w, h));
+                IntPtr hdc = g.GetHdc();
+                PrintWindow(hwnd, hdc, 0);
+                g.ReleaseHdc(hdc);
             }
             return bmp;
         }
 
-        static Mat ToMat(Bitmap bmp)
+        // ===== CONVERT BITMAP → MAT KHÔNG DÙNG EXTENSIONS =====
+        public static Mat BitmapToMat(Bitmap bmp)
         {
-            using var ms = new MemoryStream();
-            bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
-            return Cv2.ImDecode(ms.ToArray(), ImreadModes.Color);
+            using MemoryStream ms = new MemoryStream();
+            bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            ms.Position = 0;
+            return Mat.FromStream(ms, ImreadModes.Color);
         }
 
-        public static (CvPoint? p, double score) MatchOnce(Bitmap hayBmp, Bitmap tplBmp, double threshold)
+        // ===== TEMPLATE MATCHING (KHÔNG DÙNG TemplateMatchModes) =====
+        public static (OpenCvSharp.Point? pt, double score) MatchTemplateSafe(Mat frame, Mat tpl, double threshold)
         {
-            using var hay = ToMat(hayBmp);
-            using var tpl = ToMat(tplBmp);
-            using var hayGray = new Mat();
-            using var tplGray = new Mat();
+            using Mat result = new Mat();
 
-            Cv2.CvtColor(hay, hayGray, ColorConversionCodes.BGR2GRAY);
-            Cv2.CvtColor(tpl, tplGray, ColorConversionCodes.BGR2GRAY);
-
-            using var result = new Mat(hayGray.Rows - tplGray.Rows + 1, hayGray.Cols - tplGray.Cols + 1, MatType.CV_32FC1);
-            Cv2.MatchTemplate(hayGray, tplGray, result, TemplateMatchModes.CCoeffNormed);
-            Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out CvPoint maxLoc);
+            Cv2.MatchTemplate(frame, tpl, result, TemplateMatchModes.CCoeffNormed);
+            Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out OpenCvSharp.Point maxLoc);
 
             if (maxVal >= threshold)
-            {
-                var center = new CvPoint(maxLoc.X + tplGray.Cols / 2, maxLoc.Y + tplGray.Rows / 2);
-                return (center, maxVal);
-            }
+                return (maxLoc, maxVal);
+
             return (null, maxVal);
         }
 
-        public static bool ClickImage(IntPtr hwnd, string imgPath, double threshold, Action<string>? log = null)
+        // Multi-scale (an toàn)
+        public static (OpenCvSharp.Point? pt, double score) MatchMultiScale(Bitmap frameBmp, Bitmap tplBmp, double th)
         {
-            using var frame = CaptureWindow(hwnd);
-            using var tpl = (Bitmap)Image.FromFile(imgPath);
-            var (pt, score) = MatchOnce(frame, tpl, threshold);
+            using Mat frame = BitmapToMat(frameBmp);
+            using Mat tpl = BitmapToMat(tplBmp);
 
-            if (!pt.HasValue)
+            double best = 0;
+            OpenCvSharp.Point? bestPt = null;
+
+            double[] scales = { 1.0, 0.95, 1.05 };
+
+            foreach (double sc in scales)
             {
-                log?.Invoke($"🙈 Không thấy {Path.GetFileName(imgPath)} (score={score:F2})");
-                return false;
+                using Mat resized = new Mat();
+                Cv2.Resize(frame, resized, new OpenCvSharp.Size(), sc, sc);
+
+                var (pt, score) = MatchTemplateSafe(resized, tpl, th);
+
+                if (pt != null && score > best)
+                {
+                    best = score;
+                    bestPt = pt;
+                }
             }
 
-            ClickClient(hwnd, pt.Value.X, pt.Value.Y);
-            log?.Invoke($"🖱 Click {Path.GetFileName(imgPath)} tại ({pt.Value.X},{pt.Value.Y}) score={score:F2}");
-            return true;
+            return (bestPt, best);
         }
-
-        public static void ClickClient(IntPtr hwnd, int x, int y)
+        public static void ClickScreen(int x, int y, Action<string> log)
         {
-            int lParam = (y << 16) | (x & 0xFFFF);
-            PostMessage(hwnd, WM_LBUTTONDOWN, 1, lParam);
-            Thread.Sleep(25);
-            PostMessage(hwnd, WM_LBUTTONUP, 0, lParam);
+            log($"🖱️ ClickScreen ({x},{y})");
+
+            Cursor.Position = new System.Drawing.Point(x, y);
+            Thread.Sleep(20);
+
+            mouse_event(MouseEventFlags.LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(30);
+            mouse_event(MouseEventFlags.LEFTUP, 0, 0, 0, UIntPtr.Zero);
         }
 
-        public static bool IsPopupVisible(IntPtr hwnd, string popupImg, double threshold = 0.8)
+        [Flags]
+        public enum MouseEventFlags : uint
         {
-            using var frame = CaptureWindow(hwnd);
-            using var tpl = (Bitmap)Image.FromFile(popupImg);
-            var (pt, score) = MatchOnce(frame, tpl, threshold);
-            return pt.HasValue && score >= threshold;
-        }
-        [StructLayout(LayoutKind.Sequential)]
-        struct INPUT
-        {
-            public uint type;
-            public MOUSEINPUT mi;
+            LEFTDOWN = 0x0002,
+            LEFTUP = 0x0004,
+            ABSOLUTE = 0x8000,
+            MOVE = 0x0001
         }
 
-        [StructLayout(LayoutKind.Sequential)]
-        struct MOUSEINPUT
-        {
-            public int dx;
-            public int dy;
-            public uint mouseData;
-            public uint dwFlags;
-            public uint time;
-            public IntPtr dwExtraInfo;
-        }
+        [DllImport("user32.dll")]
+        static extern void mouse_event(MouseEventFlags dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 
-        const uint INPUT_MOUSE = 0;
-        const uint MOUSEEVENTF_MOVE = 0x0001;
-        const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
-        const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-        const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        // CLICK
+        [DllImport("user32.dll")]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+        const int WM_LBUTTONDOWN = 0x0201;
+        const int WM_LBUTTONUP = 0x0202;
 
         public static void ClickClient(IntPtr hwnd, int x, int y, Action<string>? log = null)
         {
-            int lParam = (y << 16) | (x & 0xFFFF);
+            IntPtr lParam = (IntPtr)((y << 16) | (x & 0xFFFF));
 
-            PostMessage(hwnd, WM_LBUTTONDOWN, 1, lParam);
-            Thread.Sleep(25);
-            PostMessage(hwnd, WM_LBUTTONUP, 0, lParam);
+            SendMessage(hwnd, WM_LBUTTONDOWN, IntPtr.Zero, lParam);
+            SendMessage(hwnd, WM_LBUTTONUP, IntPtr.Zero, lParam);
 
-            log?.Invoke($"✅ FakeClickClient @client=({x},{y})");
+            log?.Invoke($"FakeClickClient @client=({x},{y})");
         }
 
+        // CLICK BY IMAGE
+        public static bool ClickImage(IntPtr hwnd, string imgPath, double th, Action<string> log)
+        {
+            if (!File.Exists(imgPath))
+            {
+                log($" Missing {imgPath}");
+                return false;
+            }
 
+            using var frame = CaptureWindow(hwnd);
+            using var tpl = (Bitmap)Image.FromFile(imgPath);
+
+            var (pt, score) = MatchMultiScale(frame, tpl, th);
+
+            if (pt != null)
+            {
+                ClickClient(hwnd, pt.Value.X, pt.Value.Y, log);
+                log($" Click {Path.GetFileName(imgPath)} @({pt.Value.X},{pt.Value.Y}) score={score:F2}");
+                return true;
+            }
+
+            log($" Không thấy {Path.GetFileName(imgPath)} (score={score:F2})");
+            return false;
+        }
+
+        // POPUP
+        public static bool IsPopupVisible(IntPtr hwnd, string imgPath, double th)
+        {
+            if (!File.Exists(imgPath))
+                return false;
+
+            using var frame = CaptureWindow(hwnd);
+            using var tpl = (Bitmap)Image.FromFile(imgPath);
+
+            var (pt, score) = MatchMultiScale(frame, tpl, th);
+
+            return pt != null;
+        }
     }
 }
