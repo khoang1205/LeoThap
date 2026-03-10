@@ -5,7 +5,7 @@ using System.Reflection.Metadata;
 using System.Runtime.InteropServices;
 using System.Text;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Menu;
-
+using System.Net.Http;
 namespace LeoThap
 {
     public partial class Form1 : Form
@@ -39,23 +39,124 @@ namespace LeoThap
         {
             Instance = this;
             InitializeComponent();
-            Load += (s, e) =>
+            
+
+            Load += async (s, e) =>
             {
+                ToggleUI(false);
+                Append("⏳ Đang kiểm tra bản quyền...");
+                bool isValid = await CheckLicenseAsync();
+
+                if (!isValid)
+                {
+                    string myHwid = HWIDHelper.GetHWID();
+
+                    // Tự tạo một Form cảnh báo chuyên nghiệp
+                    Form alert = new Form()
+                    {
+                        Text = "Cảnh báo Bản Quyền",
+                        Size = new Size(420, 220),
+                        StartPosition = FormStartPosition.CenterScreen,
+                        FormBorderStyle = FormBorderStyle.FixedDialog,
+                        MaximizeBox = false,
+                        MinimizeBox = false,
+                        TopMost = true // Luôn nổi lên trên
+                    };
+
+                    Label lbl = new Label()
+                    {
+                        Text = "Máy của bạn chưa được cấp phép sử dụng Tool này.\n\nVui lòng copy mã bên dưới và gửi cho Admin để kích hoạt:",
+                        Location = new Point(20, 20),
+                        AutoSize = true,
+                        Font = new Font("Segoe UI", 9, FontStyle.Regular)
+                    };
+
+                    TextBox txtHwid = new TextBox()
+                    {
+                        Text = myHwid,
+                        Location = new Point(20, 80),
+                        Width = 360,
+                        ReadOnly = true, // Không cho sửa, chỉ cho copy
+                        Font = new Font("Consolas", 10, FontStyle.Bold)
+                    };
+
+                    Button btnCopy = new Button()
+                    {
+                        Text = "📋 Copy Mã Máy",
+                        Location = new Point(130, 120),
+                        Size = new Size(140, 35),
+                        Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                        Cursor = Cursors.Hand
+                    };
+
+                    // Sự kiện khi bấm nút Copy
+                    btnCopy.Click += (senderObj, args) =>
+                    {
+                        Clipboard.SetText(myHwid);
+                        MessageBox.Show("✅ Đã copy mã vào bộ nhớ tạm!\nBây giờ bạn có thể dán ",
+                                        "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    };
+
+                    alert.Controls.Add(lbl);
+                    alert.Controls.Add(txtHwid);
+                    alert.Controls.Add(btnCopy);
+
+                    // Hiện Form và dừng code tại đây cho đến khi user tắt Form
+                    alert.ShowDialog();
+
+                    // Đóng tool sau khi tắt hộp thoại
+                    Environment.Exit(0);
+                    return;
+                }
+
+                // Đã hợp lệ -> Mở tool
                 LoadWindows();
                 txtAssetsDir.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets");
-                Append(" Tool đã sẵn sàng");
-                if (string.IsNullOrWhiteSpace(txtSuGiaX.Text) ||
-       string.IsNullOrWhiteSpace(txtSuGiaY.Text))
+                Append("✅ Tool đã sẵn sàng");
+                ToggleUI(true); // Mở khóa giao diện
+
+                if (string.IsNullOrWhiteSpace(txtSuGiaX.Text) || string.IsNullOrWhiteSpace(txtSuGiaY.Text))
                 {
                     Config.HasSuGia = false;
                     Config.Save();
                     Append("⚠️ F6 trống → Tự động tắt chế độ F6 → dùng template SuGia*.png");
                 }
             };
+        }
+
+        // Thêm hàm kiểm tra bản quyền
+        private async Task<bool> CheckLicenseAsync()
+        {
+            string myHwid = HWIDHelper.GetHWID();
+
+            try
+            {
+                // CÁCH 1: KIỂM TRA ONLINE (Khuyên dùng)
+                // Thay link này bằng link file txt trên host của bạn (Pastebin raw, Github raw, v.v.)
+                // File txt đó chỉ cần chứa các HWID, mỗi mã 1 dòng.
+                string licenseUrl = "https://raw.githubusercontent.com/YourName/Repo/main/keys.txt";
+
+                using (HttpClient client = new HttpClient())
+                {
+                    string validHwids = await client.GetStringAsync(licenseUrl);
+                    if (validHwids.Contains(myHwid))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                Append("❌ Lỗi kết nối máy chủ bản quyền.");
+                return false;
+            }
+
+            return false;
+        }
 
             // ===== ĐĂNG KÝ HOTKEY =====
           
-        }
+        
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             UnregisterHotKey(this.Handle, HOTKEY_BOSS);
