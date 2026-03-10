@@ -131,17 +131,26 @@ namespace LeoThap
 
             try
             {
-                // CÁCH 1: KIỂM TRA ONLINE (Khuyên dùng)
-                // Thay link này bằng link file txt trên host của bạn (Pastebin raw, Github raw, v.v.)
-                // File txt đó chỉ cần chứa các HWID, mỗi mã 1 dòng.
                 string licenseUrl = "https://raw.githubusercontent.com/khoang1205/LeoThap/main/keys.txt";
 
                 using (HttpClient client = new HttpClient())
                 {
-                    string validHwids = await client.GetStringAsync(licenseUrl);
-                    if (validHwids.Contains(myHwid))
+                    // Tải toàn bộ nội dung file text về
+                    string validHwidsText = await client.GetStringAsync(licenseUrl);
+
+                    // Tách nội dung thành từng dòng riêng biệt
+                    string[] lines = validHwidsText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    foreach (string line in lines)
                     {
-                        return true;
+                        // Cắt lấy phần mã HWID đứng trước dấu "|" và xóa khoảng trắng dư thừa
+                        string hwidInFile = line.Split('|')[0].Trim();
+
+                        // So sánh chính xác tuyệt đối 2 mã với nhau (bỏ qua viết hoa/thường)
+                        if (string.Equals(hwidInFile, myHwid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true; // Trùng khớp hoàn toàn -> Cho chạy!
+                        }
                     }
                 }
             }
@@ -154,9 +163,9 @@ namespace LeoThap
             return false;
         }
 
-            // ===== ĐĂNG KÝ HOTKEY =====
-          
-        
+        // ===== ĐĂNG KÝ HOTKEY =====
+
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             UnregisterHotKey(this.Handle, HOTKEY_BOSS);
