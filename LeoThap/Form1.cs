@@ -134,7 +134,7 @@ namespace LeoThap
                 // CÁCH 1: KIỂM TRA ONLINE (Khuyên dùng)
                 // Thay link này bằng link file txt trên host của bạn (Pastebin raw, Github raw, v.v.)
                 // File txt đó chỉ cần chứa các HWID, mỗi mã 1 dòng.
-                string licenseUrl = "https://raw.githubusercontent.com/YourName/Repo/main/keys.txt";
+                string licenseUrl = "https://raw.githubusercontent.com/khoang1205/LeoThap/main/keys.txt";
 
                 using (HttpClient client = new HttpClient())
                 {
